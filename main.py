@@ -74,22 +74,24 @@ LEFT JOIN pdf_video pv ON v.id = pv.id_video
 LEFT JOIN pdf p ON pv.id_pdf = p.id
 """
 
-def _where(q: str, diff: str) -> (str, list):
+def _where(q: str, diffs: List[str]) -> (str, list):
     clauses, params = [], []
     if q:
         clauses.append("v.nom ILIKE %s")
         params.append(f"%{q}%")
-    if diff:
-        clauses.append("""
+    if diffs:
+        placeholders = ",".join(["%s"] * len(diffs))
+        clauses.append(f"""
             EXISTS (
               SELECT 1
               FROM pdf_video pv2
               JOIN pdf p2 ON pv2.id_pdf = p2.id
-              WHERE pv2.id_video = v.id AND p2.difficulte = %s
+              WHERE pv2.id_video = v.id AND p2.difficulte IN ({placeholders})
             )
         """)
-        params.append(diff)
+        params.extend(diffs)
     return ("WHERE " + " AND ".join(clauses), params) if clauses else ("", params)
+
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
 @app.get("/health")
@@ -110,7 +112,7 @@ def list_difficulties():
 @app.get("/videos", response_model=PageOut)
 def list_videos(
     q: str = Query("", description="Recherche plein texte sur v.nom"),
-    diff: str = Query("", description="Filtre sur p.difficulte"),
+    diff: List[str] = Query([], description="Filtre sur une ou plusieurs difficultés"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     order: str = Query("desc", pattern="^(asc|desc)$"),
