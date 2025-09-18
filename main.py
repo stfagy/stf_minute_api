@@ -34,7 +34,7 @@ app.add_middleware(
         "http://127.0.0.1:8000",
     ],
     allow_credentials=False,
-    allow_methods=["GET"],
+    allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -117,9 +117,10 @@ def list_videos(
     offset: int = Query(0, ge=0),
     order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
-    where_sql, params = _where(q.strip(), diff.strip())
-    order_sql = "DESC" if order == "desc" else "ASC"
+    # ICI: ne pas faire diff.strip() (diff est une liste)
+    where_sql, params = _where(q.strip(), diff)
 
+    order_sql = "DESC" if order == "desc" else "ASC"
     total_sql = "SELECT COUNT(*) FROM video v " + where_sql
     page_sql = (
         BASE_SELECT +
