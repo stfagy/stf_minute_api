@@ -4,7 +4,8 @@ from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import psycopg
+from datetime import datetime
+
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
@@ -43,7 +44,7 @@ class VideoOut(BaseModel):
     nom: str
     url: str
     thumbnail: Optional[str] = ""
-    created_at: Optional[str] = None
+    created_at: Optional[datetime] = None   # ← au lieu de Optional[str]
     difficulties: List[str] = []
     pdfs: List[Dict[str, Any]] = []
 
