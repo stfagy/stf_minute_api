@@ -56,7 +56,11 @@ class PageOut(BaseModel):
 BASE_SELECT = """
 SELECT
   v.id, v.nom, v.url, v.thumbnail, v.created_at,
-  COALESCE(array_agg(DISTINCT p.difficulte) FILTER (WHERE p.id IS NOT NULL), '{}') AS difficulties,
+  COALESCE(
+  array_agg(DISTINCT p.difficulte)
+    FILTER (WHERE p.id IS NOT NULL AND p.difficulte IS NOT NULL),
+  '{}'
+) AS difficulties,
   COALESCE(
     json_agg(
       DISTINCT jsonb_build_object(
