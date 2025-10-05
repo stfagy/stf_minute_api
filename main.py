@@ -1,21 +1,26 @@
-import os
-from typing import Optional, List, Dict, Any
+# main.py — API fusionnée (Vidéos + Fretboard)
 
-from fastapi import FastAPI, Query
+import os
+from typing import Optional, List, Dict, Any, Tuple
+from datetime import datetime
+
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from datetime import datetime
 
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-# ── Config ───────────────────────────────────────────────────────────────────
-# Sur Render, mets DATABASE_URL en variable d'environnement (Internal Database URL)
+# ==== Imports "fretboard" (depuis ton code existant) ====
+from music_utils import (   # ← garde music_utils.py à côté de main.py
+    get_fretboard_notes, get_note_name, NOTES_SHARP
+)
+
+# ── Config DB (reprend ta logique Render) ────────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL manquant (ajoute-le dans Render > Environment).")
 
-# Pool Postgres (psycopg v3)
 pool = ConnectionPool(
     conninfo=DATABASE_URL,
     min_size=1,
@@ -23,28 +28,29 @@ pool = ConnectionPool(
     kwargs={"autocommit": True, "row_factory": dict_row},
 )
 
-app = FastAPI(title="MUdM Videos API", version="1.0")
+# ── App & CORS ──────────────────────────────────────────────────────────────
+app = FastAPI(title="MUdM API (fusion)", version="1.0")
 
-# Autorise ton site (GitHub Pages) + local dev
+ALLOWED_ORIGINS = [
+    "https://stfagy.github.io",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://stfagy.github.io",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-    ],
-    allow_credentials=False,
-    allow_methods=["GET", "OPTIONS"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,   # mets True si tu utilises des cookies
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── Schémas de sortie ───────────────────────────────────────────────────────
+# ── Schémas de sortie (partie vidéos) ───────────────────────────────────────
 class VideoOut(BaseModel):
     id: str
     nom: str
     url: str
     thumbnail: Optional[str] = ""
-    created_at: Optional[datetime] = None   # ← au lieu de Optional[str]
+    created_at: Optional[datetime] = None
     difficulties: List[str] = []
     pdfs: List[Dict[str, Any]] = []
 
@@ -52,7 +58,7 @@ class PageOut(BaseModel):
     total: int
     items: List[VideoOut]
 
-# ── SQL helpers ─────────────────────────────────────────────────────────────
+# ── SQL helpers (partie vidéos) ─────────────────────────────────────────────
 BASE_SELECT = """
 SELECT
   v.id, v.nom, v.url, v.thumbnail, v.created_at,
@@ -74,7 +80,7 @@ LEFT JOIN pdf_video pv ON v.id = pv.id_video
 LEFT JOIN pdf p ON pv.id_pdf = p.id
 """
 
-def _where(q: str, diffs: List[str]) -> (str, list):
+def _where(q: str, diffs: List[str]) -> Tuple[str, list]:
     clauses, params = [], []
     if q:
         clauses.append("v.nom ILIKE %s")
@@ -92,16 +98,17 @@ def _where(q: str, diffs: List[str]) -> (str, list):
         params.extend(diffs)
     return ("WHERE " + " AND ".join(clauses), params) if clauses else ("", params)
 
-
-# ── Endpoints ────────────────────────────────────────────────────────────────
-@app.get("/health")
+# ── Endpoints communs ───────────────────────────────────────────────────────
+@app.get("/health", tags=["core"])
 def health():
+    # Ping DB pour healthcheck robuste
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT 1;")
         cur.fetchone()
     return {"ok": True}
 
-@app.get("/difficulties")
+# ── Endpoints Vidéos ────────────────────────────────────────────────────────
+@app.get("/difficulties", tags=["videos"])
 def list_difficulties():
     sql = "SELECT COALESCE(p.difficulte,'') AS d, COUNT(*) AS n FROM pdf p GROUP BY d ORDER BY d;"
     with pool.connection() as conn, conn.cursor() as cur:
@@ -109,7 +116,7 @@ def list_difficulties():
         rows = cur.fetchall()
     return [{"difficulte": r["d"], "count": r["n"]} for r in rows]
 
-@app.get("/videos", response_model=PageOut)
+@app.get("/videos", response_model=PageOut, tags=["videos"])
 def list_videos(
     q: str = Query("", description="Recherche plein texte sur v.nom"),
     diff: List[str] = Query([], description="Filtre sur une ou plusieurs difficultés"),
@@ -117,10 +124,9 @@ def list_videos(
     offset: int = Query(0, ge=0),
     order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
-    # ICI: ne pas faire diff.strip() (diff est une liste)
     where_sql, params = _where(q.strip(), diff)
-
     order_sql = "DESC" if order == "desc" else "ASC"
+
     total_sql = "SELECT COUNT(*) FROM video v " + where_sql
     page_sql = (
         BASE_SELECT +
@@ -136,3 +142,25 @@ def list_videos(
 
     items = [VideoOut(**r) for r in rows]
     return PageOut(total=total, items=items)
+
+# ── Endpoint Fretboard (depuis ton second backend) ──────────────────────────
+@app.get("/fretboard", tags=["fretboard"])
+def fretboard(
+    root: str = "C",
+    pattern: List[int] = Query(..., description="Ex: gamme: 0,2,4,5,7,9,11"),
+    tuning: List[str] = Query(["G","C","E","A"], description="Ex: ukulélé standard"),
+    frets: int = 12
+):
+    try:
+        # validation simple des entrées
+        if root not in NOTES_SHARP:
+            raise ValueError("Note racine invalide")
+        patt = [int(p) for p in pattern]
+        board = get_fretboard_notes(root, patt, tuning, frets)
+
+        root_idx = NOTES_SHARP.index(root)
+        scale_notes = [get_note_name((root_idx + p) % 12, root, patt) for p in patt]
+
+        return {"board": board, "scale_notes": scale_notes}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
