@@ -3,7 +3,7 @@ from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 
 from psycopg.rows import dict_row
@@ -38,19 +38,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ── Schémas de sortie ───────────────────────────────────────────────────────
 class VideoOut(BaseModel):
     id: str
     nom: str
     url: str
     thumbnail: Optional[str] = ""
-    created_at: Optional[datetime] = None   # ← au lieu de Optional[str]
-    difficulties: List[str] = []
-    pdfs: List[Dict[str, Any]] = []
+    created_at: Optional[datetime] = None
+    difficulties: List[str] = Field(default_factory=list)
+    pdfs: List[Dict[str, Any]] = Field(default_factory=list)
+
 
 class PageOut(BaseModel):
     total: int
     items: List[VideoOut]
+
 
 # ── SQL helpers ─────────────────────────────────────────────────────────────
 BASE_SELECT = """
@@ -62,21 +65,22 @@ SELECT
   '{}'
 ) AS difficulties,
   COALESCE(
-    json_agg(
-      DISTINCT jsonb_build_object(
-        'nom', p.nom,
-        'path', p.path,
-        'gpx', p.gpx,
-        'couleur_uniforme', p.couleur_uniforme,
-        'difficulte', p.difficulte
-      )
-    ) FILTER (WHERE p.id IS NOT NULL),
-    '[]'
-  ) AS pdfs
+  json_agg(
+    DISTINCT jsonb_build_object(
+      'nom', p.nom,
+      'path', p.path,
+      'gpx', p.gpx,
+      'couleur_uniforme', p.couleur_uniforme,
+      'difficulte', p.difficulte
+    )
+  ) FILTER (WHERE p.id IS NOT NULL),
+  '[]'
+) AS pdfs
 FROM video v
 LEFT JOIN pdf_video pv ON v.id = pv.id_video
 LEFT JOIN pdf p ON pv.id_pdf = p.id
 """
+
 
 def _where(q: str, diffs: List[str]) -> (str, list):
     clauses, params = [], []
@@ -105,6 +109,7 @@ def health():
         cur.fetchone()
     return {"ok": True}
 
+
 @app.get("/difficulties")
 def list_difficulties():
     sql = "SELECT COALESCE(p.difficulte,'') AS d, COUNT(*) AS n FROM pdf p GROUP BY d ORDER BY d;"
@@ -113,13 +118,14 @@ def list_difficulties():
         rows = cur.fetchall()
     return [{"difficulte": r["d"], "count": r["n"]} for r in rows]
 
+
 @app.get("/videos", response_model=PageOut)
 def list_videos(
-    q: str = Query("", description="Recherche plein texte sur v.nom"),
-    diff: List[str] = Query([], description="Filtre sur une ou plusieurs difficultés"),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    order: str = Query("desc", pattern="^(asc|desc)$"),
+        q: str = Query("", description="Recherche plein texte sur v.nom"),
+        diff: List[str] = Query([], description="Filtre sur une ou plusieurs difficultés"),
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+        order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
     # ICI: ne pas faire diff.strip() (diff est une liste)
     where_sql, params = _where(q.strip(), diff)
@@ -127,9 +133,9 @@ def list_videos(
     order_sql = "DESC" if order == "desc" else "ASC"
     total_sql = "SELECT COUNT(*) FROM video v " + where_sql
     page_sql = (
-        BASE_SELECT +
-        where_sql +
-        f" GROUP BY v.id ORDER BY v.created_at {order_sql} NULLS LAST LIMIT %s OFFSET %s"
+            BASE_SELECT +
+            where_sql +
+            f" GROUP BY v.id ORDER BY v.created_at {order_sql} NULLS LAST LIMIT %s OFFSET %s"
     )
 
     with pool.connection() as conn, conn.cursor() as cur:
