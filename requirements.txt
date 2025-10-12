@@ -1,4 +1,5 @@
-fastapi
-uvicorn
-psycopg[binary]
-psycopg_pool
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.8
+psycopg[binary]>=3.2
+psycopg-pool>=3.2
