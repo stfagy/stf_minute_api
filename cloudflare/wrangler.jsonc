@@ -1,0 +1,7 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mudm-fretboard",
+  "main": "src/main.py",
+  "compatibility_date": "2026-11-05",
+  "compatibility_flags": ["python_workers"]
+}
